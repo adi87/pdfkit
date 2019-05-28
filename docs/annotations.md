@@ -8,6 +8,7 @@ and some other properties. Here is a list of the available annotation methods:
 
 * `note(x, y, width, height, contents, options)`
 * `link(x, y, width, height, url, options)`
+* `goTo(x, y, w, h, name, options)`
 * `highlight(x, y, width, height, options)`
 * `underline(x, y, width, height, options)`
 * `strike(x, y, width, height, options)`
@@ -61,6 +62,9 @@ Here is an example that uses a few of the annotation types.
        .strike(20, doc.y, doc.widthOfString('STRIKE!'), height)
        .text('STRIKE!');
 
+    // Adding go to as annotation
+    doc.goTo(20, doc.y, 10, 20, 'LINK', {});
+
 The output of this example looks like this.
 
 ![0](images/annotations.png)
@@ -81,19 +85,3 @@ links, underlines, and strikes.  Here's an example showing two of them:
 The output is as you'd expect:
 
 ![1]()
-
-# You made it!
-
-That's all there is to creating PDF documents in PDFKit. It's really quite
-simple to create beautiful multi-page printable documents using Node.js!
-
-This guide was generated from Markdown files using a
-PDFKit generation script. The examples are actually run to generate the output shown
-inline. The script generates both the website and the PDF guide, and
-can be found [on Github](http://github.com/devongovett/pdfkit/tree/master/docs/generate.coffee).
-Check it out if you want to see an example of a slightly more complicated renderer using
-a parser for Markdown and a syntax highlighter.
-
-If you have any questions about what you've learned in this guide, please don't
-hesitate to [ask the author](http://twitter.com/devongovett) or post an issue
-on [Github](http://github.com/devongovett/pdfkit/issues). Enjoy!

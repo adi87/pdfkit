@@ -2,7 +2,11 @@
 
 ### Unreleased
 
-### [v0.9.1] - 2019-3-04
+- Fix links to pages within the document
+- Add support for named destinations
+- Throw errors when `dash(...)` is passed invalid lengths
+
+### [v0.9.1] - 2019-04-30
 
 - Fix setting printing permission
 - Fix corruption of string objects in browser

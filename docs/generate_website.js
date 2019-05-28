@@ -1,4 +1,4 @@
-const jade = require('jade');
+const pug = require('pug');
 const { markdown } = require('markdown');
 const fs = require('fs');
 const vm = require('vm');
@@ -14,10 +14,14 @@ if (!fs.existsSync('img')) {
 const files = [
   '../README.md',
   'getting_started.md',
+  'paper_sizes.md',
   'vector.md',
   'text.md',
   'images.md',
-  'annotations.md'
+  'outline.md',
+  'annotations.md',
+  'destinations.md',
+  'you_made_it.md'
 ];
 
 // shared lorem ipsum text so we don't need to copy it into every example
@@ -81,15 +85,20 @@ const generateImages = function(tree) {
       delete attrs.alt;
       attrs.href = `${f}.png`;
 
-      // write the PDF, convert to PNG using the mac `sips`
-      // command line tool, and trim with graphicsmagick
+      // write the PDF, convert to PNG and trim with ImageMagick (https://imagemagick.org)
+      file.on('finish', () => {
+        exec(`magick convert -density 150x150 -trim ${f}.pdf ${f}.png`, (err, stdout, stderr) => {
+          if (stderr) {
+            console.error(stderr);
+          }
+          if (err) {
+            console.error(err);
+          }
+          fs.unlinkSync(`${f}.pdf`);
+        });
+      });
 
-      file.on('finish', () =>
-        exec(`sips -s format png ${f}.pdf --out ${f}.png`, function() {
-          fs.unlink(`${f}.pdf`);
-          exec(`gm convert ${f}.png -trim ${f}.png`);
-        })
-      );
+      doc.end();
     }
   }
 };
@@ -123,6 +132,6 @@ for (let index = 0; index < pages.length; index++) {
   const page = pages[index];
   page.pages = pages;
   page.index = index;
-  const html = jade.renderFile('template.jade', page);
+  const html = pug.renderFile('template.pug', page);
   fs.writeFileSync(page.file + '.html', html, 'utf8');
 }
