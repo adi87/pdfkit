@@ -312,7 +312,7 @@ function () {
 
 
         if (encryptFn) {
-          _string = encryptFn(new Buffer(_string, 'ascii')).toString('binary'); // Escape characters as required by the spec
+          _string = encryptFn(Buffer.from(_string, 'ascii')).toString('binary'); // Escape characters as required by the spec
 
           _string = _string.replace(escapableRe, function (c) {
             return escapable[c];
@@ -382,7 +382,7 @@ function (_PDFAbstractReference) {
     key: "write",
     value: function write(chunk) {
       if (!Buffer.isBuffer(chunk)) {
-        chunk = new Buffer(chunk + '\n', 'binary');
+        chunk = Buffer.from(chunk + '\n', 'binary');
       }
 
       this.uncompressedLength += chunk.length;
@@ -1036,7 +1036,7 @@ function getEncryptedPermissionsR5(permissions, encryptionKey, generateRandomWor
 
 function processPasswordR2R3R4() {
   var password = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : '';
-  var out = new Buffer(32);
+  var out = Buffer.alloc(32);
   var length = password.length;
   var index = 0;
 
@@ -1063,7 +1063,7 @@ function processPasswordR5() {
   var password = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : '';
   password = unescape(encodeURIComponent(saslprep(password)));
   var length = Math.min(127, password.length);
-  var out = new Buffer(length);
+  var out = Buffer.alloc(length);
 
   for (var i = 0; i < length; i++) {
     out[i] = password.charCodeAt(i);
@@ -3211,9 +3211,9 @@ function () {
       if (Buffer.isBuffer(src)) {
         font = fontkit.create(src, family);
       } else if (src instanceof Uint8Array) {
-        font = fontkit.create(new Buffer(src), family);
+        font = fontkit.create(Buffer.from(src), family);
       } else if (src instanceof ArrayBuffer) {
-        font = fontkit.create(new Buffer(new Uint8Array(src)), family);
+        font = fontkit.create(Buffer.from(new Uint8Array(src)), family);
       }
 
       if (font == null) {
@@ -4283,6 +4283,141 @@ function () {
   return JPEG;
 }();
 
+// buffer. png-js copies the compressed image data into a JS array one byte at
+// a time and then converts that array to a Buffer, which was the single
+// biggest cost of embedding large PNGs. The fields mirror png-js's (palette
+// and transparency stay plain arrays) so the embedding below is unchanged;
+// png-js itself is only constructed when pixels must be fully decoded.
+
+var PNGReader =
+/*#__PURE__*/
+function () {
+  function PNGReader(data) {
+    _classCallCheck(this, PNGReader);
+
+    this.data = data;
+    this.palette = [];
+    this.transparency = {};
+    var idat = [];
+    var pos = 8; // skip the signature
+
+    while (pos + 8 <= data.length) {
+      var size = data.readUInt32BE(pos);
+      var type = data.toString('ascii', pos + 4, pos + 8);
+      var body = data.subarray(pos + 8, pos + 8 + size);
+      pos += 12 + size; // length, type, data, crc
+
+      if (type === 'IHDR') {
+        this.width = body.readUInt32BE(0);
+        this.height = body.readUInt32BE(4);
+        this.bits = body[8];
+        this.colorType = body[9];
+        this.compressionMethod = body[10];
+        this.filterMethod = body[11];
+        this.interlaceMethod = body[12];
+      } else if (type === 'PLTE') {
+        this.palette = Array.from(body);
+      } else if (type === 'IDAT') {
+        idat.push(body);
+      } else if (type === 'tRNS') {
+        this.transparency = {};
+
+        if (this.colorType === 3) {
+          // one alpha per palette entry up to the last non-opaque one; the
+          // rest are opaque (padded to 255 entries, as png-js does)
+          this.transparency.indexed = Array.from(body);
+
+          for (var i = this.transparency.indexed.length; i < 255; i++) {
+            this.transparency.indexed.push(255);
+          }
+        } else if (this.colorType === 0) {
+          this.transparency.grayscale = body[0];
+        } else if (this.colorType === 2) {
+          this.transparency.rgb = Array.from(body);
+        }
+      } else if (type === 'IEND') {
+        break;
+      }
+    }
+
+    this.imgData = Buffer.concat(idat);
+    this.colors = this.colorType === 2 || this.colorType === 6 ? 3 : 1;
+    this.hasAlphaChannel = this.colorType === 4 || this.colorType === 6;
+    this.colorSpace = this.colors === 3 ? 'DeviceRGB' : 'DeviceGray';
+  }
+
+  _createClass(PNGReader, [{
+    key: "decodePixels",
+    value: function decodePixels(fn) {
+      return new PNG(this.data).decodePixels(fn);
+    }
+  }]);
+
+  return PNGReader;
+}(); // Splits 8-bit, non-interlaced PNG scanlines into colour and alpha scanlines
+// without undoing the PNG row filters. Every filter (Sub, Up, Average, Paeth)
+// predicts a byte from the same channel of the neighbouring pixels, so the
+// colour bytes and the alpha bytes of a filtered row are each a correctly
+// filtered row of their own, under the same filter type. PDF decodes them with
+// /Predictor 15, so the pixels never have to be reconstructed here.
+
+
+function splitFilteredScanlines(raw, width, height, colors) {
+  var inRow = 1 + width * (colors + 1);
+
+  if (raw.length < inRow * height) {
+    throw new Error('PNG image data is shorter than its dimensions');
+  }
+
+  var color = Buffer.allocUnsafe((1 + width * colors) * height);
+  var alpha = Buffer.allocUnsafe((1 + width) * height);
+  var i = 0;
+  var c = 0;
+  var a = 0;
+
+  for (var y = 0; y < height; y++) {
+    var filter = raw[i++];
+
+    if (filter > 4) {
+      throw new Error("Invalid PNG filter type ".concat(filter));
+    }
+
+    color[c++] = filter;
+    alpha[a++] = filter;
+
+    if (colors === 3) {
+      for (var x = 0; x < width; x++) {
+        color[c] = raw[i];
+        color[c + 1] = raw[i + 1];
+        color[c + 2] = raw[i + 2];
+        alpha[a++] = raw[i + 3];
+        c += 3;
+        i += 4;
+      }
+    } else {
+      for (var _x = 0; _x < width; _x++) {
+        color[c++] = raw[i];
+        alpha[a++] = raw[i + 1];
+        i += 2;
+      }
+    }
+  }
+
+  return {
+    color: color,
+    alpha: alpha
+  };
+} // Still-filtered scanlines compress far better than raw pixels, so the fastest
+// zlib level already beats what the old decode-and-deflate path produced at
+// the default level. On 60 production RGBA pages (329 megapixels, Node 24,
+// arm64): level 1 embedded them in 6.5s / 159MB of PDF, the default level in
+// 12.7s / 145MB, and the old path in 21.6s / 203MB.
+
+
+var FILTERED_DEFLATE = {
+  level: zlib.constants.Z_BEST_SPEED
+};
+
 var PNGImage =
 /*#__PURE__*/
 function () {
@@ -4290,7 +4425,7 @@ function () {
     _classCallCheck(this, PNGImage);
 
     this.label = label;
-    this.image = new PNG(data);
+    this.image = new PNGReader(data);
     this.width = this.image.width;
     this.height = this.image.height;
     this.imgData = this.image.imgData;
@@ -4306,7 +4441,9 @@ function () {
         return;
       }
 
-      var hasAlphaChannel = this.image.hasAlphaChannel;
+      var hasAlphaChannel = this.image.hasAlphaChannel; // alpha images that can be split without decoding (8-bit, not interlaced)
+
+      this.splitsFiltered = hasAlphaChannel && this.image.bits === 8 && this.image.interlaceMethod === 0;
       this.obj = this.document.ref({
         Type: 'XObject',
         Subtype: 'Image',
@@ -4316,11 +4453,11 @@ function () {
         Filter: 'FlateDecode'
       });
 
-      if (!hasAlphaChannel) {
+      if (!hasAlphaChannel || this.splitsFiltered) {
         var params = this.document.ref({
           Predictor: 15,
           Colors: this.image.colors,
-          BitsPerComponent: this.image.bits,
+          BitsPerComponent: hasAlphaChannel ? 8 : this.image.bits,
           Columns: this.width
         });
         this.obj.data['DecodeParms'] = params;
@@ -4332,7 +4469,7 @@ function () {
       } else {
         // embed the color palette in the PDF as an object stream
         var palette = this.document.ref();
-        palette.end(new Buffer(this.image.palette)); // build the color space array for the image
+        palette.end(Buffer.from(this.image.palette)); // build the color space array for the image
 
         this.obj.data['ColorSpace'] = ['Indexed', 'DeviceRGB', this.image.palette.length / 3 - 1, palette];
       } // For PNG color types 0, 2 and 3, the transparency data is stored in
@@ -4378,6 +4515,8 @@ function () {
         // Create a transparency SMask for the image based on the data
         // in the PLTE and tRNS sections. See below for details on SMasks.
         return this.loadIndexedAlphaChannel();
+      } else if (this.splitsFiltered) {
+        return this.splitFilteredAlphaChannel();
       } else if (hasAlphaChannel) {
         // For PNG color types 4 and 6, the transparency data is stored as a alpha
         // channel mixed in with the main image data. Separate this data out into an
@@ -4401,6 +4540,18 @@ function () {
           ColorSpace: 'DeviceGray',
           Decode: [0, 1]
         });
+
+        if (this.splitsFiltered) {
+          var params = this.document.ref({
+            Predictor: 15,
+            Colors: 1,
+            BitsPerComponent: 8,
+            Columns: this.width
+          });
+          sMask.data['DecodeParms'] = params;
+          params.end();
+        }
+
         sMask.end(this.alphaChannel);
         this.obj.data['SMask'] = sMask;
       } // add the actual image data
@@ -4412,20 +4563,67 @@ function () {
       return this.imgData = null;
     }
   }, {
+    key: "fail",
+    value: function fail(err) {
+      this.document.emit('error', err);
+    } // Inflates once, splits the still-filtered scanlines into colour and alpha
+    // (see splitFilteredScanlines), and deflates the two halves concurrently on
+    // libuv's thread pool, so neither the row filters nor the pixels are ever
+    // reconstructed in JavaScript.
+
+  }, {
+    key: "splitFilteredAlphaChannel",
+    value: function splitFilteredAlphaChannel() {
+      var _this = this;
+
+      zlib.inflate(this.imgData, function (err, raw) {
+        if (err) {
+          return _this.fail(err);
+        }
+
+        var planes;
+
+        try {
+          planes = splitFilteredScanlines(raw, _this.width, _this.height, _this.image.colors);
+        } catch (splitErr) {
+          return _this.fail(splitErr);
+        }
+
+        var pending = 2;
+
+        var done = function done(key) {
+          return function (deflateErr, out) {
+            if (deflateErr) {
+              return _this.fail(deflateErr);
+            }
+
+            _this[key] = out;
+
+            if (--pending === 0) {
+              _this.finalize();
+            }
+          };
+        };
+
+        zlib.deflate(planes.color, FILTERED_DEFLATE, done('imgData'));
+        zlib.deflate(planes.alpha, FILTERED_DEFLATE, done('alphaChannel'));
+      });
+    }
+  }, {
     key: "splitAlphaChannel",
     value: function splitAlphaChannel() {
-      var _this = this;
+      var _this2 = this;
 
       return this.image.decodePixels(function (pixels) {
         var a, p;
-        var colorCount = _this.image.colors;
-        var pixelCount = _this.width * _this.height;
-        var imgData = new Buffer(pixelCount * colorCount);
-        var alphaChannel = new Buffer(pixelCount);
+        var colorCount = _this2.image.colors;
+        var pixelCount = _this2.width * _this2.height;
+        var imgData = Buffer.alloc(pixelCount * colorCount);
+        var alphaChannel = Buffer.alloc(pixelCount);
         var i = p = a = 0;
         var len = pixels.length; // For 16bit images copy only most significant byte (MSB) - PNG data is always stored in network byte order (MSB first)
 
-        var skipByteCount = _this.image.bits === 16 ? 1 : 0;
+        var skipByteCount = _this2.image.bits === 16 ? 1 : 0;
 
         while (i < len) {
           for (var colorIndex = 0; colorIndex < colorCount; colorIndex++) {
@@ -4437,27 +4635,27 @@ function () {
           i += skipByteCount;
         }
 
-        _this.imgData = zlib.deflateSync(imgData);
-        _this.alphaChannel = zlib.deflateSync(alphaChannel);
-        return _this.finalize();
+        _this2.imgData = zlib.deflateSync(imgData);
+        _this2.alphaChannel = zlib.deflateSync(alphaChannel);
+        return _this2.finalize();
       });
     }
   }, {
     key: "loadIndexedAlphaChannel",
     value: function loadIndexedAlphaChannel() {
-      var _this2 = this;
+      var _this3 = this;
 
       var transparency = this.image.transparency.indexed;
       return this.image.decodePixels(function (pixels) {
-        var alphaChannel = new Buffer(_this2.width * _this2.height);
+        var alphaChannel = Buffer.alloc(_this3.width * _this3.height);
         var i = 0;
 
         for (var j = 0, end = pixels.length; j < end; j++) {
           alphaChannel[i++] = transparency[pixels[j]];
         }
 
-        _this2.alphaChannel = zlib.deflateSync(alphaChannel);
-        return _this2.finalize();
+        _this3.alphaChannel = zlib.deflateSync(alphaChannel);
+        return _this3.finalize();
       });
     }
   }]);
@@ -4480,12 +4678,12 @@ function () {
       if (Buffer.isBuffer(src)) {
         data = src;
       } else if (src instanceof ArrayBuffer) {
-        data = new Buffer(new Uint8Array(src));
+        data = Buffer.from(new Uint8Array(src));
       } else {
         var match;
 
         if (match = /^data:.+;base64,(.*)$/.exec(src)) {
-          data = new Buffer(match[1], 'base64');
+          data = Buffer.from(match[1], 'base64');
         } else {
           data = fs.readFileSync(src);
 
@@ -5132,7 +5330,7 @@ function (_stream$Readable) {
     key: "_write",
     value: function _write(data) {
       if (!Buffer.isBuffer(data)) {
-        data = new Buffer(data + '\n', 'binary');
+        data = Buffer.from(data + '\n', 'binary');
       }
 
       this.push(data);

@@ -27,7 +27,7 @@ function () {
       return typeof data === 'string' ? data : data.toString();
     }
 
-    return new Buffer(data, typeof data === 'string' ? 'base64' : undefined);
+    return Buffer.from(data, typeof data === 'string' ? 'base64' : undefined);
   };
 
   _proto.writeFileSync = function writeFileSync(fileName, content) {
